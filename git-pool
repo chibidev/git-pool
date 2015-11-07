@@ -1,0 +1,76 @@
+#!/bin/bash
+
+if [ "$GIT_POOL_HOME" == "" ]; then
+    GIT_POOL_HOME="$HOME/.gitpool"
+fi
+
+[[ ! -d "$GIT_POOL_HOME" ]] && mkdir -p "$GIT_POOL_HOME"
+
+
+function die() {
+    echo $@
+    exit 128
+}
+
+function find_url_in_pool() {
+    url="$1"
+    name=$(find "$GIT_POOL_HOME" -type f -name config -exec grep -H "$url" {} \; | cut -d ':' -f 1)
+    [[ "$name" == "" ]] && echo "" && return
+    dirname $(dirname "$name")
+}
+
+function mirror_from_pool() {
+    git_dir="$1/.git"
+    new_workdir="$2"
+    branch="$3"
+
+    # From git-new-workdir
+    #
+    # create the links to the original repo.  explicitly exclude index, HEAD and
+    # logs/HEAD from the list since they are purely related to the current working
+    # directory, and should not be shared.
+    for x in config refs logs/refs objects info hooks packed-refs remotes rr-cache svn
+    do
+        mkdir -p "$new_workdir/.git"
+        # create a containing directory if needed
+        case $x in
+        */*)
+            mkdir -p "$new_workdir/.git/${x%/*}"
+            ;;
+        esac
+
+        ln -s "$git_dir/$x" "$new_workdir/.git/$x"
+    done
+
+    cp "$git_dir/HEAD" "$new_workdir/.git/HEAD"
+    cd "$wd"
+    git checkout -f $branch
+}
+
+function clone() {
+    git_url="$1"
+    wd="$2"
+    branch=$3
+
+    [[ `find_url_in_pool "$git_url"` == "" ]] && pushd $GIT_POOL_HOME > /dev/null && git clone "$git_url" && popd
+    mirror_from_pool $(find_url_in_pool "$git_url") $wd $branch
+}
+
+function mirror() {
+    repo="$1"
+    wd="$2"
+    branch="$3"
+    [[ ! -d "$GIT_POOL_HOME/$1" ]] && die "Repository does not exist"
+    [[ -d "$wd" ]] && die "Destination is not empty"
+    mirror_from_pool "$GIT_POOL_HOME/$repo" "$wd" $branch
+}
+
+
+case "$1" in
+    "clone")
+        clone $2 $3 $4
+        ;;
+    "mirror")
+        mirror $2 $3 $4
+        ;;
+esac
