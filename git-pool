@@ -13,16 +13,16 @@ function die() {
 }
 
 function find_url_in_pool() {
-    url="$1"
-    name=$(find "$GIT_POOL_HOME" -type f -name config -exec grep -H "$url" {} \; | cut -d ':' -f 1)
+    local url="$1"
+    local name=$(find "$GIT_POOL_HOME" -type f -name config -exec grep -H "$url" {} \; | cut -d ':' -f 1)
     [[ "$name" == "" ]] && echo "" && return
     dirname $(dirname "$name")
 }
 
 function mirror_from_pool() {
-    git_dir="$1/.git"
-    new_workdir="$2"
-    branch="$3"
+    local git_dir="$1/.git"
+    local new_workdir="$2"
+    local branch="$3"
 
     # From git-new-workdir
     #
@@ -48,29 +48,38 @@ function mirror_from_pool() {
 }
 
 function clone() {
-    git_url="$1"
-    wd="$2"
-    branch=$3
+    local git_url="${@: -2:1}"
+    local wd="${@: -1}"
 
-    [[ `find_url_in_pool "$git_url"` == "" ]] && pushd $GIT_POOL_HOME > /dev/null && git clone "$git_url" && popd
-    mirror_from_pool $(find_url_in_pool "$git_url") $wd $branch
+    if [[ `find_url_in_pool "$git_url"` == "" ]]; then
+        pushd $GIT_POOL_HOME > /dev/null && git clone ${@:1:$len} && popd > /dev/null || die ""
+    fi
+    [[ "$?" -eq 0 ]] && mirror_from_pool $(find_url_in_pool "$git_url") $wd
 }
 
 function mirror() {
-    repo="$1"
-    wd="$2"
-    branch="$3"
+    local repo="$1"
+    local wd="$2"
+    local branch="$3"
     [[ ! -d "$GIT_POOL_HOME/$1" ]] && die "Repository does not exist"
     [[ -d "$wd" ]] && die "Destination is not empty"
     mirror_from_pool "$GIT_POOL_HOME/$repo" "$wd" $branch
 }
 
+function path() {
+    find_url_in_pool $@
+}
 
-case "$1" in
-    "clone")
-        clone $2 $3 $4
-        ;;
-    "mirror")
-        mirror $2 $3 $4
-        ;;
-esac
+function list() {
+    ls -1 $GIT_POOL_HOME
+}
+
+function name() {
+    basename `find_url_in_pool $@`
+}
+
+command="$1"
+shift
+
+eval "$command $@"
+
