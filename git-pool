@@ -22,7 +22,6 @@ function find_url_in_pool() {
 function mirror_from_pool() {
     local git_dir="$1/.git"
     local new_workdir="$2"
-    local branch="$3"
 
     # From git-new-workdir
     #
@@ -43,43 +42,142 @@ function mirror_from_pool() {
     done
 
     cp "$git_dir/HEAD" "$new_workdir/.git/HEAD"
-    cd "$wd"
-    git checkout -f $branch
 }
 
-function clone() {
+function rotate_name() {
+    local num=`echo "$1" | grep -o '\-[0-9][0-9]*$' | cut -d '-' -f 2`
+    if [ "$num" == "" ]; then
+        echo "$1-0"
+    else
+        num=$((num+1))
+        echo "$1" | sed "s/-[0-9][0-9]*$/-$num/"
+    fi
+}
+
+function load_config() {
+    local key=$1
+    local default=$2
+    local val=`git config --global --get $key`
+
+    if [ "$val" == "" ]; then
+        echo $default
+    else
+        echo $val
+    fi
+}
+
+function command_clone() {
+    if [ "`load_config pool.disabled "false"`" == "true" ]; then
+        git clone $@
+        return
+    fi
+
     local git_url="${@: -2:1}"
     local wd="${@: -1}"
 
-    if [[ `find_url_in_pool "$git_url"` == "" ]]; then
-        pushd $GIT_POOL_HOME > /dev/null && git clone ${@:1:$len} && popd > /dev/null || die ""
+    if [ $# -lt 2 ]; then
+        git_url="${@: -1}"
+        wd=""
     fi
-    [[ "$?" -eq 0 ]] && mirror_from_pool $(find_url_in_pool "$git_url") $wd
+
+    local pool_name=`find_url_in_pool "$git_url"`
+    if [ "$pool_name" == "" ]; then
+        if [ "$wd" != "" ]; then
+            pool_name=`basename $wd`
+            while [ -d "$GIT_POOL_HOME/$pool_name" ]; do
+                pool_name=`rotate_name $pool_name`
+            done
+        fi
+
+        pushd $GIT_POOL_HOME > /dev/null && git clone $git_url $pool_name && popd > /dev/null || die ""
+        pool_name=`find_url_in_pool $git_url`
+    fi
+    if [ "$wd" == "" ]; then
+        wd=`basename "$pool_name"`
+    fi
+
+    local branch=""
+    for i in {1..$#}; do
+        case ${!i} in
+            "-b" | "--branch")
+                i=$((i+1))
+                branch=${@[$((i+1))]}
+                ;;
+        esac
+    done
+
+    mirror_from_pool $pool_name $wd
+
+    cd $wd
+    git checkout -f $branch
 }
 
-function mirror() {
+function command_mirror() {
     local repo="$1"
     local wd="$2"
     local branch="$3"
-    [[ ! -d "$GIT_POOL_HOME/$1" ]] && die "Repository does not exist"
+    [[ ! -d "$GIT_POOL_HOME/$repo" ]] && die "Repository does not exist"
     [[ -d "$wd" ]] && die "Destination is not empty"
-    mirror_from_pool "$GIT_POOL_HOME/$repo" "$wd" $branch
+    mirror_from_pool "$GIT_POOL_HOME/$repo" "$wd"
+    cd $wd
+    git checkout -f $branch
 }
 
-function path() {
+function command_path() {
     find_url_in_pool $@
 }
 
-function list() {
+function command_list() {
     ls -1 $GIT_POOL_HOME
 }
 
-function name() {
+function command_name() {
     basename `find_url_in_pool $@`
+}
+
+function command_relink() {
+    local wd="$1"
+    local url="$2"
+
+    [[ ! -d "$wd" ]] && die "Directory does not exist"
+    [[ ! -d "$wd/.git" ]] && die "Directory is not a git repository"
+
+    pushd $wd > /dev/null
+
+    git diff > .gitpool.diff
+    git diff --cached > .gitpool-cached.diff
+
+    local pool_dir=$(find_url_in_pool "$url")
+    if [ "$pool_dir" == "" ]; then
+        #mkdir -p ".gitbackup"
+        #cp ".git/HEAD" ".gitbackup/HEAD"
+        #cp ".git/index" ".gitbackup/index"
+        pool_dir="$GIT_POOL_HOME/`basename $wd`"
+        mkdir -p $pool_dir
+        mv ".git" "$pool_dir/.git"
+        mv $pool_dir/.git/index .git/index
+        pushd $pool_dir > /dev/null
+        git checkout -f
+        popd > /dev/null
+    else
+        mv ".git" ".gitbackup"
+    fi
+    mirror_from_pool $(find_url_in_pool "$url") . || die "Error mirroring"
+    git checkout -f
+
+    rm -rf ".gitbackup"
+
+    patch -p1 < .gitpool.diff
+    patch -p1 < .gitpool-cached.diff
+
+    rm .gitpool.diff
+    rm .gitpool-cached.diff
+
+    popd > /dev/null
 }
 
 command="$1"
 shift
 
-eval "$command $@"
+eval "command_$command $@"
 
